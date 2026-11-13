@@ -1,0 +1,139 @@
+<!-- Aseprite -->
+<!-- Copyright (C) 2018-2025  Igara Studio S.A. -->
+<gui>
+  <window id="zoo" text="@zoo.widget_zoo">
+    <vbox expansive="true">
+      <hbox>
+        <button id="reset" icon="arrow_circle_cw" tooltip="@zoo.reset" />
+        <separator horizontal="true" expansive="true" />
+        <buttonset id="config_tabs" columns="3">
+          <item text="@zoo.normal" selected="true" />
+          <item text="@zoo.disabled" />
+          <item text="@zoo.readonly" />
+        </buttonset>
+        <separator horizontal="true" expansive="true" />
+        <button id="theme_selector" icon="combobox_arrow_down" tooltip="@zoo.select_theme" />
+      </hbox>
+
+      <boxfiller height="4"></boxfiller>
+        <grid id="main_container" childspacing="6" columns="3" expansive="true">
+          <!-- Buttons -->
+          <vbox expansive="true" width="100">
+            <separator text="@zoo.buttons" horizontal="true" />
+            <hbox>
+              <button text="@zoo.button" />
+              <button text="@zoo.mini" style="mini_button"></button>
+              <button icon="debug_continue" tooltip="@zoo.icon_button" />
+              <boxfiller />
+            </hbox>
+            <filename buttononly="true" />
+            <colorpicker />
+            <dropdownbutton text="@zoo.dropdown_button" />
+            <buttonset columns="3">
+              <item text="1" />
+              <item icon="debug_continue" />
+              <item text="2" />
+            </buttonset>
+            <buttonset columns="2" multiple="true">
+              <item text="1" selected="true" />
+              <item text="2" />
+              <item text="3" />
+              <item text="4" selected="true" />
+            </buttonset>
+          </vbox>
+
+          <!-- CheckBoxes -->
+          <vbox expansive="true" width="100">
+            <separator text="@zoo.checkboxes" horizontal="true" />
+            <check text="@zoo.checkbox" />
+            <check text="@zoo.checkbox" selected="true" />
+            <radio text="@zoo.radiobox" group="2" />
+            <radio text="@zoo.radiobox" group="2" selected="true" />
+          </vbox>
+
+          <!-- Entries -->
+          <vbox expansive="true" width="100">
+            <separator text="@zoo.text_entry" horizontal="true" />
+            <hbox>
+              <label text="@zoo.for" for="entry" />
+              <entry id="entry" maxsize="255" text=""  expansive="true" />
+            </hbox>
+            <entry id="entry_suf" maxsize="255" text="@zoo.with" suffix="@zoo.suffix" />
+            <expr id="entry_expr" maxsize="10" placeholder="@zoo.expr" />
+            <expr id="entry_expr_suf" maxsize="10" suffix="px" decimals="2" text="5" placeholder="@zoo.expr_with_sfx" />
+            <view height="30">
+              <textedit id="text_edit" text="" placeholder="@zoo.textedit" />
+            </view>
+            <filename id="filename" />
+            <search id="search" />
+          </vbox>
+
+          <!-- ComboBoxes -->
+          <vbox expansive="true">
+            <separator text="@zoo.comboboxes" horizontal="true" />
+            <combobox id="static_combo_box" suffix="with suffix">
+              <listitem text="@zoo.combobox" />
+              <listitem text="@zoo.combobox" />
+              <listitem text="@zoo.combobox" />
+            </combobox>
+            <combobox id="editable_combo_box" editable="true">
+              <listitem text="@zoo.editable_combobox" />
+              <listitem text="@zoo.editable_combobox" />
+              <listitem text="@zoo.editable_combobox" />
+            </combobox>
+            <boxfiller />
+          </vbox>
+
+          <!-- Separators -->
+          <vbox expansive="true">
+            <separator text="@zoo.separators" horizontal="true" />
+            <hbox>
+              <separator minheight="24" />
+              <separator horizontal="true" expansive="true" />
+              <separator />
+            </hbox>
+          </vbox>
+
+          <!-- Sliders -->
+          <vbox expansive="true">
+            <separator text="@zoo.sliders" horizontal="true" />
+            <slider id="slider" min="1" max="9999" />
+            <alphaslider id="slider_alpha" min="0" max="100" style="mini_slider" />
+            <opacityslider id="slider_opacity" min="1" max="9999" />
+            <boxfiller />
+          </vbox>
+
+          <!-- TextBox -->
+          <vbox expansive="true">
+            <separator text="@zoo.textbox" horizontal="true" />
+            <view height="35">
+              <textbox text="@zoo.textbox_view" width="100" />
+            </view>
+          </vbox>
+
+          <!-- Labels -->
+          <vbox expansive="true">
+            <separator text="@zoo.labels" horizontal="true" />
+            <label text="@zoo.normal_label" />
+            <link text="@zoo.link_label" url="https://www.aseprite.org/" />
+          </vbox>
+
+          <!-- Images -->
+          <vbox expansive="true">
+            <separator text="@zoo.images" horizontal="true" />
+            <hbox>
+              <image id="image_icon" icon="warning_box" />
+              <image id="image_file" file="icons/ext16.png" />
+            </hbox>
+          </vbox>
+
+          <!-- Font -->
+          <vbox expansive="true" cell_hspan="3">
+            <separator text="@zoo.fonts" horizontal="true" />
+            <font id="font_picker" />
+            <boxfiller />
+          </vbox>
+        </grid>
+    </vbox>
+  </window>
+</gui>

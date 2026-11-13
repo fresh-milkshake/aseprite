@@ -1,0 +1,146 @@
+name: Windows release build
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Validate release PR
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./.github/scripts/validate-release.ps1
+      - name: Validate translations
+        run: python .github/scripts/check-translations.py
+      - name: Validate packaging scripts
+        run: |
+          Get-ChildItem .github/scripts -Filter *.ps1 | ForEach-Object {
+            $parseTokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count) { throw ($parseErrors -join "`n") }
+          }
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Cache C++ compilation
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.19.0
+      - name: Install Ninja
+        run: python -m pip install ninja==1.13.0
+      - name: Download matching Skia
+        shell: bash
+        run: |
+          set -eo pipefail
+          skia_url=$(bash laf/misc/skia-url.sh release windows x64)
+          curl --fail --location --retry 3 "$skia_url" --output "$RUNNER_TEMP/skia.zip"
+          unzip -q "$RUNNER_TEMP/skia.zip" -d skia
+      - name: Configure release and tests
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DUPDATE_VERSION_WITH_GIT=OFF `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            -DENABLE_TESTS=ON -DENABLE_SCRIPTING=ON -DENABLE_CCACHE=OFF `
+            -DLAF_BACKEND=skia `
+            "-DSKIA_DIR=$env:GITHUB_WORKSPACE/skia" `
+            "-DSKIA_LIBRARY_DIR=$env:GITHUB_WORKSPACE/skia/out/Release-x64" `
+            "-DSKIA_LIBRARY=$env:GITHUB_WORKSPACE/skia/out/Release-x64/skia.lib"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build
+        id: build
+        run: cmake --build build --parallel 4
+      - name: C++ tests
+        run: ctest --test-dir build --output-on-failure --parallel 2
+      - name: CLI and Lua tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          export ASEPRITE="$GITHUB_WORKSPACE/build/bin/aseprite.exe"
+          cd tests
+          bash run-tests.sh
+      - name: Concurrent recent store checks
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 3
+        run: ./.github/scripts/test-recent-store.ps1
+      - name: Windows GUI checks
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          $env:ASEPRITE_USER_FOLDER = Join-Path $env:RUNNER_TEMP ('aseprite-gui-settings-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force $env:ASEPRITE_USER_FOLDER | Out-Null
+          $process = Start-Process build/bin/windows_ui_check.exe -PassThru -NoNewWindow -WorkingDirectory $PWD.Path -RedirectStandardOutput gui-check.log -RedirectStandardError gui-check-error.log
+          if (-not $process.WaitForExit(180000)) {
+            $process.Kill()
+            throw 'GUI checks timed out'
+          }
+          Get-Content gui-check.log, gui-check-error.log
+          if ($process.ExitCode -ne 0) { throw "GUI checks failed: $($process.ExitCode)" }
+      - name: Russian Windows GUI checks
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          $env:ASEPRITE_USER_FOLDER = Join-Path $env:RUNNER_TEMP ('aseprite-ru-settings-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force $env:ASEPRITE_USER_FOLDER | Out-Null
+          "[general]`nlanguage = ru" | Set-Content (Join-Path $env:ASEPRITE_USER_FOLDER 'aseprite.ini') -Encoding utf8
+          # Native extension preferences are stored beside the extension.
+          # Reset only this build's English-test state before the Russian run.
+          Remove-Item 'build/bin/data/extensions/minecraft-tools/__pref.lua' -ErrorAction SilentlyContinue
+          $env:ASEPRITE_GUI_LANGUAGE = 'ru'
+          $process = Start-Process build/bin/windows_ui_check.exe -PassThru -NoNewWindow -WorkingDirectory $PWD.Path -RedirectStandardOutput gui-check-ru.log -RedirectStandardError gui-check-ru-error.log
+          if (-not $process.WaitForExit(180000)) {
+            $process.Kill()
+            throw 'Russian GUI checks timed out'
+          }
+          Get-Content gui-check-ru.log, gui-check-ru-error.log
+          if ($process.ExitCode -ne 0) { throw "Russian GUI checks failed: $($process.ExitCode)" }
+      - name: Upload GUI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-gui-evidence
+          path: |
+            gui-results/*.png
+            gui-results-ru/*.png
+            gui-results/*.log
+            gui-results-ru/*.log
+            gui-check*.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Package and test portable application
+        id: package
+        run: ./.github/scripts/package-windows.ps1
+      - name: Upload portable release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: aseprite-v${{ steps.package.outputs.version }}-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true

@@ -1,0 +1,25 @@
+<!-- Aseprite -->
+<!-- Copyright (C) 2018-present  Igara Studio S.A. -->
+<!-- Copyright (C) 2018  David Capello -->
+<gui>
+<window id="about" text="@about.title">
+  <vbox>
+    <label text="" id="title" />
+    <label text="@about.description" />
+    <link text="@about.credits" url="" id="credits" />
+    <link text="@about.translators" url="" id="i18n_credits" />
+    <link text="@about.licenses" url="" id="licenses" />
+    <separator horizontal="true" />
+    <hbox>
+      <label text="Copyright (C) 2001-2026" />
+      <link text="Igara Studio S.A." url="https://igara.com/" />
+    </hbox>
+    <link text="https://www.aseprite.org/" url="https://www.aseprite.org/" />
+    <hbox>
+      <boxfiller />
+      <button text="@general.close" closewindow="true" id="ok" magnet="true" minwidth="60" />
+      <boxfiller />
+    </hbox>
+  </vbox>
+</window>
+</gui>
