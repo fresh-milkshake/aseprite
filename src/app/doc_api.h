@@ -1,0 +1,215 @@
+// Aseprite
+// Copyright (C) 2019-present  Igara Studio S.A.
+// Copyright (C) 2001-2018  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+
+#ifndef APP_DOC_API_H_INCLUDED
+#define APP_DOC_API_H_INCLUDED
+#pragma once
+
+#include "app/doc_api_dnd_helper.h"
+#include "app/drop_frame_place.h"
+#include "app/tags_handling.h"
+#include "doc/algorithm/flip_type.h"
+#include "doc/color.h"
+#include "doc/frame.h"
+#include "doc/image_ref.h"
+#include "doc/tile.h"
+#include "gfx/rect.h"
+
+#include <map>
+#include <memory>
+
+namespace doc {
+class Cel;
+class CelData;
+class Image;
+class Layer;
+class LayerGroup;
+class LayerImage;
+class LayerTilemap;
+class Mask;
+class Palette;
+class Sprite;
+} // namespace doc
+
+namespace app {
+class Doc;
+class Transaction;
+
+using namespace doc;
+using namespace docapi;
+
+// High-level API to modify a document adding undo information, i.e.
+// adding new "Cmd"s in the given transaction.
+//
+// In the past there were plans to remove this class, but it got
+// bigger and bigger and there wasn't a real replacement. Some
+// attempts to avoid adding new member functions in DocApi are:
+//
+// 1. Creating new standalone functions like the ones from
+//    doc_range_ops.h, or util/cel_ops.h
+// 2. Creating a new Command/QuickCommand, although that only makes
+//    sense if we want to expose the functionality to the end-user,
+//    and the number of parameters is quite small.
+//
+// Sometimes complex sprite changes require storing some special
+// state until the transaction ends, like HandleLinkedCels and the
+// m_linkedCels to map linked cels in the source sprite/layer and
+// replicate them in the destination sprite/layer. This requires
+// such coordination with moveCel()/copyCel() methods that it would
+// be quite hard to replicate that in a standalone function.
+//
+class DocApi {
+public:
+  // When cloning layers, it indicates if we should share the tileset
+  // between the copy or create a new copy of the tileset.
+  enum class ShareTilesets { No, Yes };
+
+  DocApi(Doc* document, Transaction& transaction);
+
+  // Sprite API
+  void setSpriteSize(Sprite* sprite, int w, int h);
+  void setSpriteTransparentColor(Sprite* sprite, color_t maskColor);
+  void cropSprite(Sprite* sprite, const gfx::Rect& bounds, const bool trimOutside = false);
+  void trimSprite(Sprite* sprite, const bool byGrid);
+
+  // Frames API
+  void addFrame(Sprite* sprite, frame_t newFrame);
+  void addEmptyFrame(Sprite* sprite, frame_t newFrame);
+  void addEmptyFramesTo(Sprite* sprite, frame_t newFrame);
+  void copyFrame(Sprite* sprite,
+                 frame_t fromFrame,
+                 const frame_t newFrame,
+                 const DropFramePlace dropFramePlace,
+                 const TagsHandling tagsHandling);
+  void removeFrame(Sprite* sprite, frame_t frame);
+  void setTotalFrames(Sprite* sprite, frame_t frames);
+  void setFrameDuration(Sprite* sprite, frame_t frame, int msecs);
+  void setFrameRangeDuration(Sprite* sprite, frame_t from, frame_t to, int msecs);
+  void moveFrame(Sprite* sprite,
+                 const frame_t frame,
+                 frame_t targetFrame,
+                 const DropFramePlace dropFramePlace,
+                 const TagsHandling tagsHandling);
+
+  // Cels API
+  void addCel(Layer* layer, Cel* cel);
+  Cel* addCel(LayerImage* layer, frame_t frameNumber, const ImageRef& image);
+  void clearCel(Layer* layer, frame_t frame);
+  void clearCel(Cel* cel);
+  void clearCelAndAllLinks(Cel* cel);
+  void setCelPosition(Sprite* sprite, Cel* cel, int x, int y);
+  void setCelOpacity(Sprite* sprite, Cel* cel, int newOpacity);
+  void moveCel(Layer* srcLayer, frame_t srcFrame, Layer* dstLayer, frame_t dstFrame);
+  void copyCel(Layer* srcLayer,
+               frame_t srcFrame,
+               Layer* dstLayer,
+               frame_t dstFrame,
+               const bool* forceContinuous = nullptr);
+  void swapCel(Layer* layer, frame_t frame1, frame_t frame2);
+
+  // Layers API
+  LayerImage* newLayer(Layer* parent, const std::string& name);
+  LayerImage* newLayerAfter(Layer* parent, const std::string& name, Layer* afterThis);
+  LayerGroup* newGroup(Layer* parent, const std::string& name);
+  LayerGroup* newGroupAfter(Layer* parent, const std::string& name, Layer* afterThis);
+  LayerTilemap* newTilemapAfter(Layer* parent,
+                                const std::string& name,
+                                tileset_index tsi,
+                                Layer* afterThis);
+  void addLayer(Layer* parent, Layer* newLayer, Layer* afterThis);
+  void removeLayer(Layer* layer);
+  void restackLayerAfter(Layer* layer, Layer* parent, Layer* afterThis);
+  void restackLayerBefore(Layer* layer, Layer* parent, Layer* beforeThis);
+  Layer* duplicateLayerAfter(Layer* sourceLayer,
+                             Layer* parent,
+                             Layer* afterLayer,
+                             ShareTilesets shareTilesets,
+                             const std::string& nameSuffix = {});
+  Layer* duplicateLayerBefore(Layer* sourceLayer,
+                              Layer* parent,
+                              Layer* beforeLayer,
+                              ShareTilesets shareTilesets,
+                              const std::string& nameSuffix = {});
+
+  Layer* copyLayerForSprite(doc::Layer* layer, doc::Sprite* sprite, ShareTilesets shareTilesets);
+
+  // Images API
+  void replaceImage(Sprite* sprite, const ImageRef& oldImage, const ImageRef& newImage);
+
+  // Image API
+  void flipImage(Image* image, const gfx::Rect& bounds, doc::algorithm::FlipType flipType);
+  void flipImageWithMask(Layer* layer, Image* image, doc::algorithm::FlipType flipType);
+
+  // Mask API
+  void copyToCurrentMask(Mask* mask);
+  void setMaskPosition(int x, int y);
+
+  // Palette API
+  void setPalette(Sprite* sprite, frame_t frame, const Palette* newPalette);
+
+  // Drag and Drop helper API
+  void dropDocumentsOnTimeline(app::Doc* doc,
+                               doc::frame_t frame,
+                               doc::layer_t layerIndex,
+                               InsertionPoint insert,
+                               DroppedOn droppedOn,
+                               DocProvider& provider);
+
+private:
+  void cropImageLayer(LayerImage* layer, const gfx::Rect& bounds, const bool trimOutside);
+  bool cropCel(LayerImage* layer, Cel* cel, const gfx::Rect& bounds, const bool trimOutside);
+  void setCelFramePosition(Cel* cel, frame_t frame);
+  void moveFrameLayer(Layer* layer, frame_t frame, frame_t beforeFrame);
+  void adjustTags(Sprite* sprite,
+                  const frame_t frame,
+                  const frame_t delta,
+                  const DropFramePlace dropFramePlace,
+                  const TagsHandling tagsHandling);
+
+  class HandleLinkedCels {
+  public:
+    HandleLinkedCels(DocApi& api,
+                     doc::Layer* srcLayer,
+                     const doc::frame_t srcFrame,
+                     doc::Layer* dstLayer,
+                     const doc::frame_t dstFrame);
+    ~HandleLinkedCels();
+    bool linkWasCreated() { return m_created; }
+
+  private:
+    DocApi& m_api;
+    doc::ObjectId m_srcDataId;
+    doc::Layer* m_dstLayer;
+    doc::frame_t m_dstFrame;
+    bool m_created;
+  };
+
+  bool copyFromLinkedCels(Cel** srcCel, doc::ObjectId& srcDataId);
+
+  // Data for special operations.
+  struct Data {
+    // Map used in copyCel() to re-create the original set of linked
+    // cels from the src layers when we copy a block of cels.
+    // map: ObjectId of CelData -> Cel*
+    std::map<doc::ObjectId, doc::Cel*> linkedCels;
+
+    // Already duplicated tilesets to map source shared-tilesets when
+    // duplicating layers to other sprites.
+    doc::Sprite* lastDuplicateSprite = nullptr;
+    std::map<doc::ObjectId, doc::tileset_index> mappedTilesets;
+  };
+
+  Data* data();
+
+  Doc* m_document;
+  Transaction& m_transaction;
+  std::unique_ptr<Data> m_data;
+};
+
+} // namespace app
+
+#endif

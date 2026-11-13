@@ -1,0 +1,73 @@
+// Aseprite
+// Copyright (c) 2024  Igara Studio S.A.
+// Copyright (C) 2001-2017  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+
+#ifdef HAVE_CONFIG_H
+  #include "config.h"
+#endif
+
+#include "app/app.h"
+#include "app/commands/command.h"
+#include "app/commands/params.h"
+#include "app/context.h"
+#include "app/ui/color_bar.h"
+
+namespace app {
+
+class SetPaletteEntrySizeCommand : public Command {
+public:
+  SetPaletteEntrySizeCommand();
+
+protected:
+  bool onEnabled(Context* context) override;
+  void onLoadParams(const Params& params) override;
+  bool onChecked(Context* context) override;
+  void onExecute(Context* context) override;
+  std::string onGetFriendlyName() const override;
+  bool isListed(const Params& params) const override { return !params.empty(); }
+
+private:
+  int m_size;
+};
+
+SetPaletteEntrySizeCommand::SetPaletteEntrySizeCommand()
+  : Command(CommandId::SetPaletteEntrySize())
+  , m_size(7)
+{
+}
+
+bool SetPaletteEntrySizeCommand::onEnabled(Context* context)
+{
+  return context->isUIAvailable();
+}
+
+void SetPaletteEntrySizeCommand::onLoadParams(const Params& params)
+{
+  if (params.has_param("size"))
+    m_size = params.get_as<int>("size");
+}
+
+bool SetPaletteEntrySizeCommand::onChecked(Context* context)
+{
+  return (ColorBar::instance()->getPaletteView()->getBoxSize() == m_size);
+}
+
+void SetPaletteEntrySizeCommand::onExecute(Context* context)
+{
+  ColorBar::instance()->getPaletteView()->setBoxSize(m_size);
+}
+
+std::string SetPaletteEntrySizeCommand::onGetFriendlyName() const
+{
+  return Command::onGetFriendlyName() + " " + std::to_string(m_size);
+}
+
+Command* CommandFactory::createSetPaletteEntrySizeCommand()
+{
+  return new SetPaletteEntrySizeCommand;
+}
+
+} // namespace app

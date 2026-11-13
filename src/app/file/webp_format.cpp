@@ -1,0 +1,450 @@
+// Aseprite
+// Copyright (C) 2018-2023  Igara Studio S.A.
+// Copyright (C) 2015-2018  David Capello
+// Copyright (C) 2015  Gabriel Rauter
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+
+#ifdef HAVE_CONFIG_H
+  #include "config.h"
+#endif
+
+#include "app/i18n/strings.h"
+
+#include "app/app.h"
+#include "app/console.h"
+#include "app/context.h"
+#include "app/doc.h"
+#include "app/file/file.h"
+#include "app/file/file_format.h"
+#include "app/file/format_options.h"
+#include "app/file/webp_options.h"
+#include "app/ini_file.h"
+#include "app/pref/preferences.h"
+#include "base/convert_to.h"
+#include "base/file_handle.h"
+#include "doc/doc.h"
+#include "ui/manager.h"
+
+#include "webp_options.xml.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+
+#include <webp/demux.h>
+#include <webp/mux.h>
+
+namespace app {
+
+using namespace base;
+
+class WebPFormat : public FileFormat {
+  const char* onGetName() const override { return "webp"; }
+
+  void onGetExtensions(base::paths& exts) const override { exts.push_back("webp"); }
+
+  dio::FileFormat onGetDioFormat() const override { return dio::FileFormat::WEBP_ANIMATION; }
+
+  int onGetFlags() const override
+  {
+    return FILE_SUPPORT_LOAD | FILE_SUPPORT_SAVE | FILE_SUPPORT_RGB | FILE_SUPPORT_RGBA |
+           FILE_SUPPORT_FRAMES | FILE_SUPPORT_GET_FORMAT_OPTIONS | FILE_ENCODE_ABSTRACT_IMAGE;
+  }
+
+  bool onLoad(FileOp* fop) override;
+#ifdef ENABLE_SAVE
+  bool onSave(FileOp* fop) override;
+#endif
+  FormatOptionsPtr onAskUserForFormatOptions(FileOp* fop) override;
+};
+
+FileFormat* CreateWebPFormat()
+{
+  return new WebPFormat;
+}
+
+const char* getDecoderErrorMessage(VP8StatusCode statusCode)
+{
+  switch (statusCode) {
+    case VP8_STATUS_OK:                  return ""; break;
+    case VP8_STATUS_OUT_OF_MEMORY:       return "out of memory"; break;
+    case VP8_STATUS_INVALID_PARAM:       return "invalid parameters"; break;
+    case VP8_STATUS_BITSTREAM_ERROR:     return "bitstream error"; break;
+    case VP8_STATUS_UNSUPPORTED_FEATURE: return "unsupported feature"; break;
+    case VP8_STATUS_SUSPENDED:           return "suspended"; break;
+    case VP8_STATUS_USER_ABORT:          return "user aborted"; break;
+    case VP8_STATUS_NOT_ENOUGH_DATA:     return "not enough data"; break;
+    default:                             return "unknown error"; break;
+  }
+}
+
+bool WebPFormat::onLoad(FileOp* fop)
+{
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* fp = handle.get();
+
+  long len = 0;
+  if (fseek(fp, 0, SEEK_END) == 0) {
+    len = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+  }
+
+  if (len < 4) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_f3657288de4c").c_str());
+    return false;
+  }
+
+  std::vector<uint8_t> buf(len);
+  if (fread(&buf[0], 1, buf.size(), fp) != buf.size()) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_40b1d3cf5541").c_str());
+    return false;
+  }
+
+  WebPData webp_data;
+  WebPDataInit(&webp_data);
+  webp_data.bytes = &buf[0];
+  webp_data.size = buf.size();
+
+  WebPAnimDecoderOptions dec_options;
+  WebPAnimDecoderOptionsInit(&dec_options);
+  dec_options.color_mode = MODE_RGBA;
+
+  WebPAnimDecoder* dec = WebPAnimDecoderNew(&webp_data, &dec_options);
+  if (dec == nullptr) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_1db3d746eb47").c_str());
+    return false;
+  }
+
+  WebPAnimInfo anim_info;
+  if (!WebPAnimDecoderGetInfo(dec, &anim_info)) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_e5d09096a098").c_str());
+    return false;
+  }
+
+  WebPDecoderConfig config;
+  WebPInitDecoderConfig(&config);
+  if (WebPGetFeatures(webp_data.bytes, webp_data.size, &config.input)) {
+    if (!fop->formatOptions()) {
+      auto opts = std::make_shared<WebPOptions>();
+      WebPOptions::Type type = WebPOptions::Simple;
+      switch (config.input.format) {
+        case 0: type = WebPOptions::Simple; break;
+        case 1: type = WebPOptions::Lossy; break;
+        case 2: type = WebPOptions::Lossless; break;
+      }
+      opts->setType(type);
+      fop->setLoadedFormatOptions(opts);
+    }
+  }
+  else {
+    config.input.has_alpha = false;
+  }
+
+  const int w = anim_info.canvas_width;
+  const int h = anim_info.canvas_height;
+
+  Sprite* sprite = new Sprite(ImageSpec(ColorMode::RGB, w, h), 256);
+  LayerImage* layer = new LayerImage(sprite);
+  sprite->root()->addLayer(layer);
+  sprite->setTotalFrames(anim_info.frame_count);
+
+  for (frame_t f = 0; f < anim_info.frame_count; ++f) {
+    ImageRef image(Image::create(IMAGE_RGB, w, h));
+    Cel* cel = new Cel(f, image);
+    layer->addCel(cel);
+  }
+
+  bool has_alpha = config.input.has_alpha;
+  frame_t f = 0;
+  int prev_timestamp = 0;
+  while (WebPAnimDecoderHasMoreFrames(dec)) {
+    uint8_t* frame_rgba;
+    int frame_timestamp = 0;
+    if (!WebPAnimDecoderGetNext(dec, &frame_rgba, &frame_timestamp)) {
+      fop->setError(app::Strings::TranslateCopy("errors.t_12a175b26595").c_str());
+      return false;
+    }
+
+    Cel* cel = layer->cel(f);
+    if (cel) {
+      const uint32_t* src = (const uint32_t*)frame_rgba;
+      for (int y = 0; y < h; ++y, src += w) {
+        memcpy(cel->image()->getPixelAddress(0, y), src, w * sizeof(uint32_t));
+      }
+
+      if (!has_alpha) {
+        const uint32_t* src = (const uint32_t*)frame_rgba;
+        const uint32_t* src_end = src + w * h;
+        while (src < src_end) {
+          const uint8_t alpha = (*src >> 24) & 0xff;
+          if (alpha < 255) {
+            has_alpha = true;
+            break;
+          }
+          ++src;
+        }
+      }
+    }
+
+    sprite->setFrameDuration(f, frame_timestamp - prev_timestamp);
+
+    prev_timestamp = frame_timestamp;
+    fop->setProgress(double(f) / double(anim_info.frame_count));
+    if (fop->isStop())
+      break;
+
+    ++f;
+  }
+  WebPAnimDecoderReset(dec);
+
+  if (!has_alpha && !fop->avoidBackgroundLayer())
+    layer->configureAsBackground();
+
+  WebPAnimDecoderDelete(dec);
+
+  // Don't use WebPDataClear because webp_data use a std::vector<> data.
+  // WebPDataClear(&webp_data);
+
+  if (fop->isStop())
+    return false;
+
+  fop->createDocument(sprite);
+  return true;
+}
+
+#ifdef ENABLE_SAVE
+
+struct WriterData {
+  FILE* fp;
+  FileOp* fop;
+  frame_t f = 0;
+  frame_t n;
+  double progress = 0.0;
+
+  WriterData(FILE* fp, FileOp* fop, frame_t n) : fp(fp), fop(fop), n(n) {}
+};
+
+static int progress_report(int percent, const WebPPicture* pic)
+{
+  auto wd = (WriterData*)pic->user_data;
+  FileOp* fop = wd->fop;
+
+  double newProgress = (double(wd->f) + double(percent) / 100.0) / double(wd->n);
+  wd->progress = std::max(wd->progress, newProgress);
+  wd->progress = std::clamp(wd->progress, 0.0, 1.0);
+
+  fop->setProgress(wd->progress);
+  if (fop->isStop())
+    return false;
+  else
+    return true;
+}
+
+bool WebPFormat::onSave(FileOp* fop)
+{
+  FileHandle handle(open_file_with_exception_sync_on_close(fop->filename(), "wb"));
+  FILE* fp = handle.get();
+
+  const FileAbstractImage* sprite = fop->abstractImageToSave();
+  const int w = sprite->width();
+  const int h = sprite->height();
+
+  if (w > WEBP_MAX_DIMENSION || h > WEBP_MAX_DIMENSION) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_370849e4248e").c_str(),
+                  w,
+                  h,
+                  WEBP_MAX_DIMENSION,
+                  WEBP_MAX_DIMENSION);
+    return false;
+  }
+
+  auto opts = fop->formatOptionsForSaving<WebPOptions>();
+  WebPConfig config;
+  WebPConfigInit(&config);
+
+  switch (opts->type()) {
+    case WebPOptions::Simple:
+    case WebPOptions::Lossless:
+      if (!WebPConfigLosslessPreset(&config, opts->compression())) {
+        fop->setError(app::Strings::TranslateCopy("errors.t_df03082a35b6").c_str());
+        return false;
+      }
+      config.image_hint = opts->imageHint();
+      break;
+
+    case WebPOptions::Lossy:
+      if (!WebPConfigPreset(&config, opts->imagePreset(), static_cast<float>(opts->quality()))) {
+        fop->setError(app::Strings::TranslateCopy("errors.t_efcefb0fa3af").c_str());
+        return false;
+      }
+      break;
+  }
+
+  WebPAnimEncoderOptions enc_options;
+  WebPAnimEncoderOptionsInit(&enc_options);
+  enc_options.anim_params.loop_count = (opts->loop() ? 0 : // 0 = infinite
+                                                       1);              // 1 = loop once
+
+  ImageRef image(Image::create(IMAGE_RGB, w, h));
+
+  const doc::frame_t totalFrames = fop->roi().frames();
+  WriterData wd(fp, fop, totalFrames);
+  WebPPicture pic;
+  WebPPictureInit(&pic);
+  pic.width = w;
+  pic.height = h;
+  pic.use_argb = true;
+  pic.argb = (uint32_t*)image->getPixelAddress(0, 0);
+  pic.argb_stride = image->rowPixels(); // Stride in pixels (not bytes)
+  pic.user_data = &wd;
+  pic.progress_hook = progress_report;
+
+  WebPAnimEncoder* enc = WebPAnimEncoderNew(w, h, &enc_options);
+  int timestamp_ms = 0;
+  for (frame_t frame : fop->roi().framesSequence()) {
+    // Render the frame in the bitmap
+    clear_image(image.get(), image->maskColor());
+    sprite->renderFrame(frame, fop->roi().frameBounds(frame), image.get());
+
+    // Switch R <-> B channels because WebPAnimEncoderAssemble()
+    // expects MODE_BGRA pictures.
+    {
+      LockImageBits<RgbTraits> bits(image.get(), Image::ReadWriteLock);
+      auto it = bits.begin(), end = bits.end();
+      for (; it != end; ++it) {
+        auto c = *it;
+        *it = rgba(rgba_getb(c), // Use blue in red channel
+                   rgba_getg(c),
+                   rgba_getr(c), // Use red in blue channel
+                   rgba_geta(c));
+      }
+    }
+
+    if (!WebPAnimEncoderAdd(enc, &pic, timestamp_ms, &config)) {
+      if (!fop->isStop()) {
+        fop->setError(app::Strings::TranslateCopy("errors.t_200a63c6d190").c_str(), frame);
+        return false;
+      }
+      else
+        return true;
+    }
+    timestamp_ms += sprite->frameDuration(frame);
+
+    wd.f++;
+  }
+  WebPAnimEncoderAdd(enc, nullptr, timestamp_ms, nullptr);
+
+  WebPData webp_data;
+  WebPDataInit(&webp_data);
+  WebPAnimEncoderAssemble(enc, &webp_data);
+  WebPAnimEncoderDelete(enc);
+
+  if (fwrite(webp_data.bytes, 1, webp_data.size, fp) != webp_data.size) {
+    fop->setError(app::Strings::TranslateCopy("errors.t_98bd299f234e").c_str());
+    return false;
+  }
+
+  WebPDataClear(&webp_data);
+  return true;
+}
+
+#endif // ENABLE_SAVE
+
+// Shows the WebP configuration dialog.
+FormatOptionsPtr WebPFormat::onAskUserForFormatOptions(FileOp* fop)
+{
+  auto opts = fop->formatOptionsOfDocument<WebPOptions>();
+  if (fop->context() && fop->context()->isUIAvailable()) {
+    try {
+      auto& pref = Preferences::instance();
+
+      if (pref.isSet(pref.webp.loop))
+        opts->setLoop(pref.webp.loop());
+
+      if (pref.isSet(pref.webp.type))
+        opts->setType(WebPOptions::Type(pref.webp.type()));
+
+      switch (opts->type()) {
+        case WebPOptions::Lossless:
+          if (pref.isSet(pref.webp.compression))
+            opts->setCompression(pref.webp.compression());
+          if (pref.isSet(pref.webp.imageHint))
+            opts->setImageHint(WebPImageHint(pref.webp.imageHint()));
+          break;
+        case WebPOptions::Lossy:
+          if (pref.isSet(pref.webp.quality))
+            opts->setQuality(pref.webp.quality());
+          if (pref.isSet(pref.webp.imagePreset))
+            opts->setImagePreset(WebPPreset(pref.webp.imagePreset()));
+          break;
+      }
+
+      if (pref.webp.showAlert()) {
+        app::gen::WebpOptions win;
+
+        auto updatePanels = [&win, &opts] {
+          int o = base::convert_to<int>(win.type()->getValue());
+          opts->setType(WebPOptions::Type(o));
+          win.losslessOptions()->setVisible(o == int(WebPOptions::Lossless));
+          win.lossyOptions()->setVisible(o == int(WebPOptions::Lossy));
+
+          auto rc = win.bounds();
+          win.setBounds(gfx::Rect(rc.origin(), win.sizeHint()));
+
+          auto manager = win.manager();
+          if (manager)
+            manager->invalidateRect(rc); // TODO this should be automatic
+          // when a window bounds is modified
+        };
+
+        win.loop()->setSelected(opts->loop());
+        win.type()->setSelectedItemIndex(int(opts->type()));
+        win.compression()->setValue(opts->compression());
+        win.imageHint()->setSelectedItemIndex(opts->imageHint());
+        win.quality()->setValue(static_cast<int>(opts->quality()));
+        win.imagePreset()->setSelectedItemIndex(opts->imagePreset());
+
+        updatePanels();
+        win.type()->Change.connect(updatePanels);
+
+        win.openWindowInForeground();
+
+        if (win.closer() == win.ok()) {
+          pref.webp.loop(win.loop()->isSelected());
+          pref.webp.type(base::convert_to<int>(win.type()->getValue()));
+          pref.webp.compression(win.compression()->getValue());
+          pref.webp.imageHint(base::convert_to<int>(win.imageHint()->getValue()));
+          pref.webp.quality(win.quality()->getValue());
+          pref.webp.imagePreset(base::convert_to<int>(win.imagePreset()->getValue()));
+          pref.webp.showAlert(!win.dontShow()->isSelected());
+
+          opts->setLoop(pref.webp.loop());
+          opts->setType(WebPOptions::Type(pref.webp.type()));
+          switch (opts->type()) {
+            case WebPOptions::Lossless:
+              opts->setCompression(pref.webp.compression());
+              opts->setImageHint(WebPImageHint(pref.webp.imageHint()));
+              break;
+            case WebPOptions::Lossy:
+              opts->setQuality(pref.webp.quality());
+              opts->setImagePreset(WebPPreset(pref.webp.imagePreset()));
+              break;
+          }
+        }
+        else {
+          opts.reset();
+        }
+      }
+    }
+    catch (const std::exception& e) {
+      Console::showException(e);
+      return std::shared_ptr<WebPOptions>(nullptr);
+    }
+  }
+  return opts;
+}
+
+} // namespace app

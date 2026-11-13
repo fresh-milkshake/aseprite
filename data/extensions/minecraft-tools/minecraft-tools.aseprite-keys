@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<keyboard>
+  <commands>
+    <key command="ShowMenu" shortcut="Alt+M"><param name="menu" value="minecraft_menu" /></key>
+    <key command="MinecraftQuickExport" shortcut="Ctrl+Alt+E" mac="Cmd+Alt+E" />
+  </commands>
+</keyboard>
