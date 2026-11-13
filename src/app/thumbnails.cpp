@@ -1,0 +1,77 @@
+// Aseprite
+// Copyright (C) 2019-present  Igara Studio S.A.
+// Copyright (C) 2018  David Capello
+// Copyright (C) 2016  Carlo Caputo
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+
+#ifdef HAVE_CONFIG_H
+  #include "config.h"
+#endif
+
+#include "app/color_spaces.h"
+#include "app/util/conversion_to_surface.h"
+#include "doc/blend_mode.h"
+#include "doc/cel.h"
+#include "doc/layer.h"
+#include "doc/sprite.h"
+#include "os/surface.h"
+#include "os/system.h"
+#include "render/render.h"
+
+namespace app { namespace thumb {
+
+os::SurfaceRef get_cel_thumbnail(ui::Display* display,
+                                 const doc::Cel* cel,
+                                 const bool scaleUpToFit,
+                                 const gfx::Size& fitInSize)
+{
+  gfx::Size newSize;
+
+  if (scaleUpToFit || cel->bounds().w > fitInSize.w || cel->bounds().h > fitInSize.h)
+    newSize = gfx::Rect(cel->bounds()).fitIn(gfx::Rect(fitInSize)).size();
+  else
+    newSize = cel->bounds().size();
+
+  if (newSize.w < 1 || newSize.h < 1)
+    return nullptr;
+
+  doc::ImageRef thumbnailImage(doc::Image::create(doc::IMAGE_RGB, newSize.w, newSize.h));
+
+  render::Render render;
+  render::Projection proj(cel->sprite()->pixelRatio(), render::Zoom(newSize.w, cel->bounds().w));
+  render.setProjection(proj);
+
+  const doc::Palette* palette = cel->sprite()->palette(cel->frame());
+  render.renderCel(thumbnailImage.get(),
+                   cel,
+                   cel->sprite(),
+                   cel->image(),
+                   cel->layer()->tileset(),
+                   palette,
+                   gfx::Rect(gfx::Point(0, 0), cel->bounds().size()),
+                   gfx::Clip(gfx::Rect(gfx::Point(0, 0), newSize)),
+                   255,
+                   doc::BlendMode::NORMAL);
+
+  if (os::SurfaceRef thumbnail = os::System::instance()->makeRgbaSurface(
+        thumbnailImage->width(),
+        thumbnailImage->height(),
+        get_current_color_space(display))) {
+    convert_image_to_surface(thumbnailImage.get(),
+                             palette,
+                             thumbnail.get(),
+                             0,
+                             0,
+                             0,
+                             0,
+                             thumbnailImage->width(),
+                             thumbnailImage->height());
+    return thumbnail;
+  }
+  else
+    return nullptr;
+}
+
+}} // namespace app::thumb

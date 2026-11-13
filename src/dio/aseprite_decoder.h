@@ -1,0 +1,105 @@
+// Aseprite Document IO Library
+// Copyright (c) 2018-present Igara Studio S.A.
+// Copyright (c) 2017 David Capello
+//
+// This file is released under the terms of the MIT license.
+// Read LICENSE.txt for more information.
+
+#ifndef DIO_ASEPRITE_DECODER_H_INCLUDED
+#define DIO_ASEPRITE_DECODER_H_INCLUDED
+#pragma once
+
+#include "base/ints.h"
+#include "base/uuid.h"
+#include "dio/aseprite_common.h"
+#include "dio/decoder.h"
+#include "doc/frame.h"
+#include "doc/layer_list.h"
+#include "doc/pixel_format.h"
+#include "doc/slices.h"
+#include "doc/tags.h"
+#include "doc/tileset.h"
+#include "doc/user_data.h"
+
+#include <map>
+#include <string>
+#include <vector>
+
+namespace doc {
+class Cel;
+class Layer;
+class Layer;
+class Mask;
+class Palette;
+class Sprite;
+class UserData;
+} // namespace doc
+
+namespace dio {
+
+class AsepriteDecoder : public Decoder {
+public:
+  bool decode() override;
+  int celType() const { return m_celType; }
+
+private:
+  bool readHeader(AsepriteHeader* header);
+  void readFrameHeader(AsepriteFrameHeader* frame_header);
+  void readPadding(const int bytes);
+  std::string readString();
+  float readFloat();
+  double readDouble();
+  doc::Palette* readColorChunk(doc::Palette* prevPal, doc::frame_t frame);
+  doc::Palette* readColor2Chunk(doc::Palette* prevPal, doc::frame_t frame);
+  doc::Palette* readPaletteChunk(doc::Palette* prevPal, doc::frame_t frame);
+  doc::Layer* readLayerChunk(AsepriteHeader* header,
+                             doc::Sprite* sprite,
+                             doc::Layer** previous_layer,
+                             int* current_level);
+  doc::Cel* readCelChunk(doc::frame_t frame,
+                         doc::PixelFormat pixelFormat,
+                         const AsepriteHeader* header,
+                         const size_t chunk_end);
+  void readCelExtraChunk(doc::Cel* cel);
+  void readColorProfile(doc::Sprite* sprite);
+  void readExternalFiles(AsepriteExternalFiles& extFiles);
+  doc::Mask* readMaskChunk();
+  void readTagsChunk(doc::Tags* tags, const size_t chunk_end);
+  void readSlicesChunk(doc::Slices& slices, const size_t chunk_end);
+  doc::Slice* readSliceChunk(doc::Slices& slices, const size_t chunk_end);
+  void readUserDataChunk(doc::UserData* userData,
+                         const AsepriteExternalFiles& extFiles,
+                         const size_t chunk_end);
+  doc::Tileset* readTilesetChunk(doc::Sprite* sprite,
+                                 const AsepriteHeader* header,
+                                 const AsepriteExternalFiles& extFiles,
+                                 const size_t chunk_end);
+  void readPropertiesMaps(doc::UserData::PropertiesMaps& propertiesMaps,
+                          const AsepriteExternalFiles& extFiles,
+                          const size_t chunk_end);
+  const doc::UserData::Variant readPropertyValue(uint16_t type, int& depth, const size_t chunk_end);
+  void readTilesData(doc::Tileset* tileset, const AsepriteExternalFiles& extFiles);
+  base::Uuid readUuid();
+
+  doc::LayerList m_allLayers;
+
+  // Maps a tileset ID on-file (key) -> tileset ID in-memory (value).
+  // Generally should be key = value, but in case an .aseprite file
+  // has too much empty tileset slots, we will adjust them.
+  std::map<doc::tileset_index, doc::tileset_index> m_tsiMap;
+
+  // Store extra flags for each tileset (mainly
+  // ASE_TILESET_FLAG_ZERO_IS_NOTILE to read old .aseprite files
+  // with a previous tileset format).
+  // Key = in-memory tileset ID
+  // Value = flags
+  std::map<doc::tileset_index, uint32_t> m_tilesetFlags;
+
+  // Latest cel type decoded, used to known the preferred cel type for
+  // this file in case we have to re-encode it.
+  int m_celType = ASE_FILE_COMPRESSED_CEL;
+};
+
+} // namespace dio
+
+#endif
